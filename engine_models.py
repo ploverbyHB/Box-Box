@@ -91,7 +91,8 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 def _get_compound(compound_str: str) -> CompoundParams:
-    key = compound_str.upper().replace("SS", "SOFT")
+    # F1 25 C6 has no coefficients yet; C5 is the nearest compound
+    key = compound_str.upper().replace("SS", "SOFT").replace("C6", "C5")
     if key in _COMPOUND_DEFAULTS:
         return _COMPOUND_DEFAULTS[key]
     return _COMPOUND_DEFAULTS["MEDIUM"]
@@ -382,10 +383,15 @@ STANDING_WATER_CLIFF = 0.18
 GRIP_FLOOR = 0.25
 PACE_LOSS_AT_ZERO_GRIP = 1.5
 
+# Telemetry frames carry weather as a label; each maps into the DAMP / WET / FLOODED bands above
+WEATHER_RAIN_PERCENT = {"LIGHTRAIN": 20, "HEAVYRAIN": 50, "STORM": 80}
+
 
 def evaluate_weather(track: dict) -> WeatherResult:
     """评估天气状况。"""
     weather = track.get("weather", {})
+    if isinstance(weather, str):
+        weather = {"rain_percent": WEATHER_RAIN_PERCENT.get(weather.upper(), 0)}
     rain_percent = weather.get("rain_percent", 0)
     intensity = _clamp(rain_percent / 100.0, 0.0, 1.0) if rain_percent else 0.0
 

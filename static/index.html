@@ -102,6 +102,14 @@
       animation: pulse 1s infinite;
     }
     #ptt-btn.busy { opacity: 0.65; cursor: wait; }
+    #engineer-btn {
+      min-width: 130px; padding: 10px 16px; border: 1px solid #2a3a2a;
+      border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; letter-spacing: 0.4px;
+      background: #15301c; color: #81c784;
+    }
+    #engineer-btn:hover { border-color: #66bb6a; }
+    #engineer-btn.off { background: #2a1515; border-color: #5a2a2a; color: #ff8a80; }
+    #engineer-btn.off:hover { border-color: #ff5252; }
     .tag.soft { background: #5a1e1e; color: #de6e6e; }
     .tag.medium { background: #5a3d1e; color: #de9e4e; }
     .tag.hard { background: #888; color: #eee; }
@@ -162,12 +170,14 @@
   <div id="engine-content"></div>
 </div>
 <div id="radio-bar">
+  <button id="engineer-btn" type="button" title="Switch the race engineer on or off: calls, radio, voice and captions">ENGINEER ON</button>
   <button id="ptt-btn" type="button" title="Click or press Space to toggle mic">MIC OFF</button>
   <div id="radio-log">Pit radio ready — ask about tyres, box, gaps, fuel…</div>
   <div id="radio-hint">Space = toggle mic</div>
+  <select id="voice-select" title="Engineer voice" style="background:#1a1a2a;color:#ddd;border:1px solid #2a2a3a;border-radius:4px;padding:6px 8px;font-size:12px;max-width:220px;"></select>
 </div>
 <div id="status-bar">
-  <span id="status-left">F1 24 · Connecting...</span>
+  <span id="status-left">F1 · Connecting...</span>
   <span id="status-right"></span>
 </div>
 
@@ -197,6 +207,7 @@ let allCars = [];
 let playerIdx = -1;
 let selectedIdx = null;
 let currentLap = 0;
+let cornerLabels = [];
 let trackName = "";
 
 // ====== Engine Panel (client-side physics) ======
@@ -303,16 +314,38 @@ function renderEnginePanel(physics) {
 const player = document.getElementById("player");
 let audioQueue = [];
 let isPlaying = false;
-function enqueueAudio(url) { audioQueue.push(url); if (!isPlaying) playNext(); }
+let audioBlocked = false;
+const audioPrompt = document.createElement("div");
+audioPrompt.textContent = "Click anywhere to turn on the engineer's voice";
+audioPrompt.style.cssText = "display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:50;background:#E10600;color:#fff;padding:8px 16px;border-radius:4px;font-size:13px;cursor:pointer;";
+document.body.appendChild(audioPrompt);
+
+function enqueueAudio(url) { audioQueue.push(url); if (!isPlaying && !audioBlocked) playNext(); }
 function playNext() {
   if (audioQueue.length === 0) { isPlaying = false; return; }
   isPlaying = true;
-  const url = audioQueue.shift();
-  player.src = url;
-  player.onended = playNext;
+  player.src = audioQueue[0];
+  player.onended = player.onerror = () => { audioQueue.shift(); playNext(); };
   player.load();
-  player.play().catch(() => { isPlaying = false; audioQueue = []; });
+  // Browsers refuse audio until the page is clicked; keep the clips and ask for a click
+  player.play().then(() => {
+    audioBlocked = false;
+    audioPrompt.style.display = "none";
+  }).catch(() => {
+    isPlaying = false;
+    audioBlocked = true;
+    audioPrompt.style.display = "block";
+  });
 }
+function unlockAudio() {
+  if (!audioBlocked) return;
+  audioBlocked = false;
+  audioPrompt.style.display = "none";
+  audioQueue = audioQueue.slice(-1);
+  playNext();
+}
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
 
 // ====== Track outline (learned from live car positions) ======
 const TRACK_BUCKET_M = 15;
@@ -479,6 +512,23 @@ function drawMap() {
     strokeSeg(seg, 14 * dpr, "rgba(255,255,255,0.12)");
     strokeSeg(seg, 9 * dpr, "#2a2a36");
     strokeSeg(seg, 1.5 * dpr, "rgba(255,255,255,0.5)");
+  }
+
+  // Corner numbers at each apex, the same numbers the engineer uses
+  ctx.font = `bold ${10 * dpr}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const corner of cornerLabels) {
+    const bucket = Math.round(corner.dist / TRACK_BUCKET_M);
+    const pt = trackPoints.get(bucket) || trackPoints.get(bucket - 1) || trackPoints.get(bucket + 1);
+    if (!pt) continue;
+    const [sx, sy] = toScreen(pt.x, pt.z);
+    ctx.fillStyle = "rgba(225,6,0,0.85)";
+    ctx.beginPath();
+    ctx.arc(sx, sy - 14 * dpr, 9 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.fillText(`C${corner.n}`, sx, sy - 14 * dpr);
   }
 
   // Cars on track
@@ -711,19 +761,22 @@ canvas.addEventListener("click", e => {
 // ====== WebSocket ======
 let ws;
 function connect() {
-  statusLeft.textContent = "F1 24 · Connecting...";
+  statusLeft.textContent = "F1 · Connecting...";
   statusLeft.style.color = "#555";
   ws = new WebSocket("ws://127.0.0.1:8000/ws/pitradio");
 
   ws.onopen = () => {
-    statusLeft.innerHTML = "F1 24 · <span class='ok'>Connected</span>";
+    statusLeft.innerHTML = "F1 · <span class='ok'>Connected</span>";
+    loadEngineer();
   };
 
   ws.onmessage = e => {
     const d = JSON.parse(e.data);
 
     if (!d.cars) {
-      if (d.type === "radio") {
+      if (d.type === "engineer") {
+        showEngineer(d.on);
+      } else if (d.type === "radio") {
         if (d.driver) setRadioLog(d.driver, d.advice || d.voice || "");
         if (d.advice) {
           alertBar.style.display = "block";
@@ -751,6 +804,7 @@ function connect() {
     learnTrack();
     if (d.player_idx !== undefined) playerIdx = d.player_idx;
     if (d.lap !== undefined) currentLap = d.lap;
+    if (d.corners) cornerLabels = d.corners;
 
     populateSelect();
 
@@ -784,7 +838,12 @@ function connect() {
 
     statusRight.textContent = `${allCars.length} cars · ${trackName || ""}`;
     if (currentLap) {
-      statusRight.textContent += ` · L${currentLap}`;
+      const total = d.track && d.track.totalLaps;
+      statusRight.textContent += ` · L${currentLap}${total ? "/" + total : ""}`;
+    }
+    const sc = d.track && d.track.safetyCar;
+    if (sc === "FULL" || sc === "VIRTUAL") {
+      statusRight.textContent += sc === "FULL" ? " · SAFETY CAR" : " · VSC";
     }
 
     // Only update alert when new advice arrives — never wipe it on telemetry ticks
@@ -803,11 +862,76 @@ function connect() {
   };
 
   ws.onclose = () => {
-    statusLeft.innerHTML = "F1 24 · <span class='err'>Disconnected</span>";
+    statusLeft.innerHTML = "F1 · <span class='err'>Disconnected</span>";
     setTimeout(connect, 3000);
   };
   ws.onerror = () => ws.close();
 }
+
+// ====== Engineer on/off ======
+const engineerBtn = $("engineer-btn");
+let engineerOn = true;
+function showEngineer(on) {
+  engineerOn = !!on;
+  engineerBtn.textContent = engineerOn ? "ENGINEER ON" : "ENGINEER OFF";
+  engineerBtn.classList.toggle("off", !engineerOn);
+  engineerBtn.setAttribute("aria-pressed", String(engineerOn));
+  if (!engineerOn) {
+    audioQueue = [];
+    player.pause();
+    isPlaying = false;
+  }
+}
+async function loadEngineer() {
+  try {
+    showEngineer((await (await fetch("/api/engineer")).json()).on);
+  } catch (e) {}
+}
+engineerBtn.addEventListener("click", async () => {
+  try {
+    const d = await (await fetch("/api/engineer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: !engineerOn }),
+    })).json();
+    showEngineer(d.on);
+  } catch (e) {}
+});
+loadEngineer();
+
+// ====== Engineer voice ======
+const voiceSelect = $("voice-select");
+async function loadVoices() {
+  try {
+    const d = await (await fetch("/api/voices")).json();
+    voiceSelect.innerHTML = "";
+    for (const v of [...d.voices, { id: "__other", name: "Other voice id…" }]) {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = v.name || v.id;
+      voiceSelect.appendChild(o);
+    }
+    voiceSelect.value = d.current;
+    voiceSelect.title = `${d.provider} voice`;
+  } catch (e) {
+    voiceSelect.style.display = "none";
+  }
+}
+voiceSelect.addEventListener("change", async () => {
+  let id = voiceSelect.value;
+  if (id === "__other") id = (prompt("Voice id (Fish Audio model id or ElevenLabs voice id)") || "").trim();
+  if (id && id !== "__other") {
+    const d = await (await fetch("/api/voice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    })).json();
+    if (d.audio_url) enqueueAudio(d.audio_url);
+    setRadioLog("Voice", d.ok ? `${d.name} on the radio` : d.error);
+  }
+  loadVoices();
+});
+loadVoices();
 
 // ====== Pit radio (push-to-talk) ======
 function setRadioLog(driverText, engText) {
@@ -841,7 +965,7 @@ async function sendToEngineer(text) {
   } catch (err) {
     console.error(err);
     window.__radioLocalPlay = false;
-    setRadioLog(msg, "Radio failed — try again");
+    setRadioLog(msg, engineerOn ? "Radio failed — try again" : "Engineer is switched off");
   } finally {
     pttBtn.classList.remove("busy", "listening");
     pttBtn.textContent = "MIC OFF";

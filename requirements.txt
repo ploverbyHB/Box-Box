@@ -1,4 +1,5 @@
 openai>=1.70
+anthropic>=1.13
 elevenlabs>=1.0
 fastapi>=0.110
 uvicorn[standard]>=0.27

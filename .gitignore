@@ -12,3 +12,6 @@ __pycache__/
 
 # Generated pit-radio audio
 static/audio/
+
+# Engineer on/off switch
+engineer.json

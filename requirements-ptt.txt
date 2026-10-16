@@ -1,0 +1,2 @@
+numpy
+onnx-asr[cpu,hub]
